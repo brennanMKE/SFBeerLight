@@ -241,7 +241,7 @@ def _dedupe(lights: list[Found]) -> list[Found]:
     """
     best: dict[str, Found] = {}
     for light in lights:
-        key = light.address or lamp.hostname
+        key = light.address or light.hostname
         current = best.get(key)
         if current is None:
             best[key] = light
@@ -249,7 +249,7 @@ def _dedupe(lights: list[Found]) -> list[Found]:
         if bool(light.name) != bool(current.name):
             if light.name:
                 best[key] = light
-        elif len(lamp.hostname) < len(current.hostname):
+        elif len(light.hostname) < len(current.hostname):
             best[key] = light
     return list(best.values())
 
@@ -351,7 +351,7 @@ def _discover_dns_sd(timeout: float) -> list[Found]:
     # fallback produced entries that could never be reached, and `--all` then
     # failed on a ghost instead of acting on the lights that are actually there.
     for light in lights:
-        light.address = _resolve_dns_sd(lamp.hostname, timeout=2.0)
+        light.address = _resolve_dns_sd(light.hostname, timeout=2.0)
     return [light for light in lights if light.address]
 
 
