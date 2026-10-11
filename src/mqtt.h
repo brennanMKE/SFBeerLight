@@ -1,0 +1,32 @@
+#ifndef MQTT_H
+#define MQTT_H
+
+#include <Arduino.h>
+
+// MQTT, for Home Assistant. Optional: a light with no broker configured never
+// connects and is fully usable over REST, which stays the interface for
+// sfbeerlight.py, identify, and OTA. See docs/home-assistant-control.md for why
+// this exists alongside REST rather than instead of it.
+//
+// The light publishes a retained Home Assistant discovery config on connect, so
+// it appears as a light entity with no YAML, no restart, and no filesystem
+// access to the Home Assistant host.
+
+void setupMqtt();
+void loopMqtt();
+
+// True when a broker is configured; connected() is whether we are talking to it
+// right now.
+bool mqttEnabled();
+bool mqttConnected();
+
+// Why the last connect attempt failed: PubSubClient's state code, and the same
+// thing in words. Empty and 0 when the last attempt succeeded.
+int mqttLastRc();
+const char *mqttLastError();
+
+// Drop the connection so the next loop reconnects with current settings. Called
+// when the broker settings are saved.
+void mqttSettingsChanged();
+
+#endif  // MQTT_H
