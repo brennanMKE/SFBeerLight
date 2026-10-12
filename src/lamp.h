@@ -29,6 +29,28 @@ bool lampPower();
 void identifyLamp(uint32_t durationMs);
 bool lampIdentifying();
 
+// ===== Strip direction =====
+//
+// The spatial effects draw with index 0 at the LEFT of the sign. The strip
+// itself may have been glued in running either way, so this says whether
+// physical LED 0 is at the right; main.cpp flips each frame to match.
+void setLampReversed(bool reversed);
+bool lampReversed();
+uint8_t lampLedCount();
+
+// Light physical LEDs 0, 1 and 2 red, green and blue and the last one white,
+// for a moment, ignoring the direction setting -- so someone at the sign can
+// see which end the strip starts from. Overrides power like identify does.
+void testLampOrder(uint32_t durationMs);
+bool lampTestingOrder();
+
+// What every LED is showing right now as 0xRRGGBB, before brightness scaling,
+// so the sign can be checked from a script rather than by walking round to
+// look at it. `logical` is what the effect drew, left to right across the sign;
+// otherwise it is the strip in physical order, overlays included. Returns the
+// LED count.
+uint8_t lampFrame(uint32_t *out, bool logical);
+
 // ===== Alert =====
 //
 // A red pulse loud enough to be noticed from across a room, for Home Assistant

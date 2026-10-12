@@ -158,12 +158,23 @@ curl -X POST http://sf-beer-light-051860.local/api/effect/reset
 |---|---|
 | `blend` | The whole strip holds one color and eases to the next. The default. |
 | `loop` | Walks the palette steadily, never resting on a color. |
-| `flicker` | Similar colors mixing and guttering, like a flame. The one effect that lights the strip several colors at once. |
+| `flicker` | Similar colors mixing and guttering, like a flame. Give it reds and ambers. |
 | `neon` | One color at full brightness, held steady, switching cleanly to the next. |
+| `drift` | The palette laid across the sign, three colors at a time, sliding left to right. |
+| `scan` | A bright band of the next color sweeping back and forth over a dim base. Best with one or two colors. |
+| `pour` | Fills from the left (the glass end) with the first color under a head of the second, holds, drains, pours again. Use the Beer preset: `ff9000,fff0c8`. |
+| `ignite` | Neon that stutters to life letter by letter on every change of color, then holds steady. |
+| `sparkle` | A slow blend with single LEDs glinting toward white, like carbonation. |
+| `breathe` | One color slowly swelling and fading, changing color at the bottom of each breath. |
 
 Up to 5 colors. An effect reverts to the default after 5 minutes unless you say
 otherwise, is capped at 8 hours, and does not survive a reboot — see
 [docs/rest-api.md](docs/rest-api.md#effects) for why that is the default.
+
+`drift`, `scan` and `pour` run left to right across the sign. If the strip was
+glued in running right to left, use **Show LED order** on the Settings page
+(red is LED 0) and tick the box if red is on the right. From a script:
+`POST /api/strip/test`, then `POST /api/strip -d 'reversed=1'`.
 
 ### Identify
 

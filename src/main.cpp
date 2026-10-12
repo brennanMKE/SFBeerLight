@@ -62,6 +62,20 @@ static const uint32_t LOOP_LEG_MS = 2500;
 static const uint32_t NEON_LEG_MS = 7000;
 static const uint32_t NEON_FADE_MS = 700;
 
+// Drift slides the palette one color across the sign per leg. Slower than
+// blend's leg, because on drift everything is moving at once.
+static const uint32_t DRIFT_LEG_MS = 8000;
+
+// One sweep of scan, left to right. A round trip is twice this.
+static const uint32_t SCAN_PASS_MS = 3500;
+
+// Ignite holds each color a little longer than neon, so the strike at the
+// start of each one is an event rather than the main thing on screen.
+static const uint32_t IGNITE_LEG_MS = 9000;
+
+// One full breath, bottom to bottom.
+static const uint32_t BREATHE_MS = 7000;
+
 // ~60 fps. Faster buys nothing visible and each show() disables interrupts for
 // roughly 30 us per LED.
 static const uint32_t FRAME_MS = 16;
@@ -91,7 +105,24 @@ static const uint8_t ALERT_FLOOR = 40;
 static const uint32_t ALERT_DEFAULT_S = 30;
 static const uint32_t ALERT_MAX_S = 3600;
 
+// What reaches the strip, in physical order.
 CRGB leds[NUM_LEDS];
+
+// What the effects draw into, in logical order: index 0 is the left of the
+// sign. Copied onto `leds` each frame, reversed if the strip runs right to
+// left. A separate buffer rather than reversing `leds` in place, because
+// flicker and ignite only rewrite an LED when its own timer fires and would
+// see their last frame backwards.
+static CRGB frame[NUM_LEDS];
+
+// Whether physical LED 0 is at the RIGHT of the sign. Stored by settings.cpp.
+static bool reversed = false;
+
+// The order test: physical LEDs 0, 1 and 2 in red, green and blue and the last
+// one white, ignoring `reversed`, so someone at the sign can see which end the
+// strip starts from and which way it runs.
+static bool testingOrder = false;
+static uint32_t testEnd = 0;
 
 // ===== State =====
 static uint8_t brightness = DEFAULT_BRIGHTNESS;
@@ -154,6 +185,25 @@ void setLampBrightness(uint8_t value) {
 
 void setLampPower(bool on) { power = on; }
 
+void setLampReversed(bool value) { reversed = value; }
+bool lampReversed() { return reversed; }
+uint8_t lampLedCount() { return NUM_LEDS; }
+
+void testLampOrder(uint32_t durationMs) {
+    testEnd = millis() + durationMs;
+    testingOrder = true;
+}
+
+bool lampTestingOrder() { return testingOrder; }
+
+uint8_t lampFrame(uint32_t *out, bool logical) {
+    const CRGB *src = logical ? frame : leds;
+    for (uint8_t i = 0; i < NUM_LEDS; i++) {
+        out[i] = ((uint32_t)src[i].r << 16) | ((uint32_t)src[i].g << 8) | src[i].b;
+    }
+    return NUM_LEDS;
+}
+
 void identifyLamp(uint32_t durationMs) {
     identifyStart = millis();
     identifyEnd = identifyStart + durationMs;
@@ -200,7 +250,7 @@ String lampEffectColorHex() { return hex(effectColor); }
 // lamp that is broken, and the device knew the answer the whole time without
 // anywhere to say it.
 const char *lampDarkReason() {
-    if (lampAlerting() || lampIdentifying()) return "";
+    if (lampAlerting() || lampIdentifying() || lampTestingOrder()) return "";
     if (!power) return "the lamp is switched off";
     if (brightness == 0) return "brightness is set to 0";
     if (currentColor.r == 0 && currentColor.g == 0 && currentColor.b == 0) {
@@ -220,6 +270,10 @@ static void applyPalette(const PaletteColor *colors, uint8_t count) {
     for (uint8_t i = 0; i < NUM_LEDS; i++) fx.timeouts[i] = now;
     fx.hueTimeout = now + 3000;
     fx.hueIndex = 0;
+
+    // Ignite strikes afresh, and no glint carries over from the last palette.
+    fx.igniteLeg = 0xFF;
+    for (uint8_t i = 0; i < NUM_LEDS; i++) fx.spark[i] = 0;
 }
 
 void resetLampEffect() {
@@ -302,6 +356,22 @@ int32_t lampEffectExpiresIn() {
     return (int32_t)((effectExpiresAt - now) / 1000);
 }
 
+// The color the sign is "on", for status and for deciding whether it is dark.
+// Once effects lay color out across the sign, LED 0 alone can be black while
+// the rest are lit -- pour, emptying from the right -- so take the brightest.
+static CRGB brightestLed() {
+    CRGB best = CRGB::Black;
+    uint16_t bestSum = 0;
+    for (uint8_t i = 0; i < NUM_LEDS; i++) {
+        uint16_t sum = (uint16_t)leds[i].r + leds[i].g + leds[i].b;
+        if (sum > bestSum) {
+            bestSum = sum;
+            best = leds[i];
+        }
+    }
+    return best;
+}
+
 static void loopLeds() {
     static uint32_t lastFrame = 0;
 
@@ -340,6 +410,30 @@ static void loopLeds() {
             fx.phase %= NEON_LEG_MS * fx.colorCount;
             renderNeon(fx, NEON_LEG_MS, NEON_FADE_MS);
             break;
+        case EFFECT_DRIFT:
+            fx.phase %= DRIFT_LEG_MS * fx.colorCount;
+            renderDrift(fx, DRIFT_LEG_MS);
+            break;
+        case EFFECT_SCAN:
+            fx.phase %= SCAN_PASS_MS * 2 * fx.colorCount;
+            renderScan(fx, SCAN_PASS_MS);
+            break;
+        case EFFECT_POUR:
+            fx.phase %= POUR_CYCLE_MS;
+            renderPour(fx);
+            break;
+        case EFFECT_IGNITE:
+            fx.phase %= IGNITE_LEG_MS * fx.colorCount;
+            renderIgnite(fx, IGNITE_LEG_MS, now);
+            break;
+        case EFFECT_SPARKLE:
+            fx.phase %= BLEND_MS * fx.colorCount;
+            renderSparkle(fx, BLEND_MS);
+            break;
+        case EFFECT_BREATHE:
+            fx.phase %= BREATHE_MS * fx.colorCount;
+            renderBreathe(fx, BREATHE_MS);
+            break;
         case EFFECT_BLEND:
         default:
             fx.phase %= BLEND_MS * fx.colorCount;
@@ -352,6 +446,7 @@ static void loopLeds() {
     // absolute deadline test strands them for 49.7 days if the loop blocks
     // across the millis() rollover. See include/every_n_millis.h.
     if (identifying && timeReached(now, identifyEnd)) identifying = false;
+    if (testingOrder && timeReached(now, testEnd)) testingOrder = false;
     if (alerting && timeReached(now, alertEnd)) {
         alerting = false;
         ESP_LOGI(TAG, "alert over");
@@ -361,7 +456,8 @@ static void loopLeds() {
     // whichever overlay started last. Both of them override what someone chose,
     // and they can overlap.
     uint8_t want = brightness;
-    if (identifying && want < IDENTIFY_MIN_BRIGHTNESS) want = IDENTIFY_MIN_BRIGHTNESS;
+    bool showing = identifying || testingOrder;
+    if (showing && want < IDENTIFY_MIN_BRIGHTNESS) want = IDENTIFY_MIN_BRIGHTNESS;
     if (alerting) want = ALERT_BRIGHTNESS;
     if (want != appliedBrightness) {
         FastLED.setBrightness(want);
@@ -375,7 +471,24 @@ static void loopLeds() {
     // is off, and conflating them is how a status page ends up reporting a
     // colour on a lamp that is dark -- which is exactly the report that made a
     // switched-off lamp look like a failure.
-    effectColor = leds[0];
+    // The logical frame onto the physical strip.
+    for (uint8_t i = 0; i < NUM_LEDS; i++) {
+        leds[reversed ? NUM_LEDS - 1 - i : i] = frame[i];
+    }
+    effectColor = brightestLed();
+
+    // Physical order on purpose: this exists to find out which way the strip
+    // runs, so it must not be flipped by the setting it is used to choose.
+    if (testingOrder) {
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        leds[0] = CRGB::Red;
+        leds[1] = CRGB::Green;
+        leds[2] = CRGB::Blue;
+        leds[NUM_LEDS - 1] = CRGB::White;
+        currentColor = leds[0];
+        FastLED.show();
+        return;
+    }
 
     if (identifying) {
         bool lit = ((now - identifyStart) / IDENTIFY_BLINK_MS) % 2 == 0;
@@ -399,7 +512,7 @@ static void loopLeds() {
     }
 
     if (!power) fill_solid(leds, NUM_LEDS, CRGB::Black);
-    currentColor = leds[0];
+    currentColor = brightestLed();
     FastLED.show();
 }
 
@@ -414,7 +527,7 @@ void setup() {
     FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);  // volts, mA
     FastLED.clear(true);
 
-    fx.leds = leds;
+    fx.leds = frame;
     fx.numLeds = NUM_LEDS;
     resetLampEffect();
 
@@ -428,6 +541,7 @@ void setup() {
     setupWifiLink();
     setLampBrightness(settings.brightness());
     setLampPower(settings.power());
+    setLampReversed(settings.reversed());
     setupMqtt();
 }
 

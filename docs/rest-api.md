@@ -105,16 +105,27 @@ curl -X POST http://light.local/api/effect/reset
 | `loop` | Walks the palette steadily, never resting on a color. |
 | `flicker` | Similar colors mixing and guttering, like a flame. |
 | `neon` | One color at full brightness, held steady, switching cleanly to the next. |
+| `drift` | The palette laid across the sign, three colors at a time, sliding left to right. |
+| `scan` | A bright band of the next color sweeping back and forth over a dim base. Best with one or two colors. |
+| `pour` | Fills from the left (the glass end) with the first color under a head of the second, holds, drains, pours again. Use the Beer preset: `ff9000,fff0c8`. |
+| `ignite` | Neon that stutters to life letter by letter on every change of color, then holds steady. |
+| `sparkle` | A slow blend with single LEDs glinting toward white, like carbonation. |
+| `breathe` | One color slowly swelling and fading, changing color at the bottom of each breath. |
 
-**The strip shows one color at a time.** It is one light behind a diffuser, not
-eight addressable pixels: several colors an inch apart mix into white. So
-`blend`, `loop` and `neon` light the whole strip a single color, and differ in
-how that color changes over time rather than in where it sits on the strip.
+**The sign is edge-lit.** The 14 LEDs sit in a row along the bottom edge of an
+engraved acrylic sheet, and each lights mostly the letters in front of it. So
+`drift`, `scan` and `pour` lay color out across the sign from left to right,
+while `blend`, `loop`, `neon`, `sparkle` and `breathe` light it all one color
+and differ in how that color changes over time.
 
-`flicker` is the deliberate exception, and relies on that mixing — give it a few
-colors that are already close together, like reds and ambers, and the LEDs
-blurring into each other at different brightnesses read as fire. Five colors
-from opposite sides of the wheel will go white.
+"Left" depends on which way the strip was glued in. `POST /api/strip/test`
+lights physical LEDs 0, 1 and 2 red, green and blue and the last LED white;
+if red is at the right, `POST /api/strip -d 'reversed=1'` flips the spatial
+effects to match. Both are also on the Settings page.
+
+`flicker` lights LEDs several colors at once too — give it a few colors that are
+already close together, like reds and ambers, and it reads as fire. Five colors
+from opposite sides of the wheel look like confetti.
 
 `colors` is up to 5 hex strings. The `#` is optional, which matters in a URL
 where it would otherwise start a fragment. Omitting `colors` keeps the palette

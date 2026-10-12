@@ -40,6 +40,9 @@ public:
     uint8_t brightness() const { return bright; }
     bool power() const { return on; }
 
+    // Whether physical LED 0 is at the right of the sign. See lamp.h.
+    bool reversed() const { return flipped; }
+
     // The broker. An empty host means MQTT is off, which is the default and a
     // fully supported way to run a light -- see docs/home-assistant-control.md.
     const String &mqttHost() const { return broker; }
@@ -52,6 +55,7 @@ public:
     // that comes back on by itself in the middle of the night.
     void saveBrightness(uint8_t value);
     void savePower(bool value);
+    void saveReversed(bool value);
     void saveNames(const String &newLabel, const String &newHost);
     void saveBroker(const String &host, uint16_t port, const String &user, const String &pass);
 
@@ -62,6 +66,7 @@ private:
     String label;
     uint8_t bright = 64;
     bool on = true;
+    bool flipped = false;
     String broker;
     uint16_t brokerPort = 1883;
     String brokerUser;
@@ -85,6 +90,9 @@ private:
     void handleApiPower();
     void handleApiBrightness();
     void handleApiIdentify();
+    void handleApiStrip();
+    void handleApiStripTest();
+    void handleApiFrame();
     void handleApiAlert();
     void handleApiAlertClear();
     void handleApiEffect();
@@ -116,5 +124,9 @@ private:
 };
 
 extern LampSettings settings;
+
+// "#ff8800", "ff8800" or "0xff8800" -> 0xff8800. False on anything else. Shared
+// by the REST API and MQTT so the two accept exactly the same colors.
+bool parseHexColor(const String &in, uint32_t &out);
 
 #endif  // SETTINGS_H

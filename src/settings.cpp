@@ -42,14 +42,15 @@ void LampSettings::begin() {
     label = p.isKey("label") ? p.getString("label") : host;
     if (p.isKey("bright")) bright = p.getUChar("bright");
     if (p.isKey("power")) on = p.getBool("power");
+    if (p.isKey("reversed")) flipped = p.getBool("reversed");
     broker = p.isKey("mqtt_host") ? p.getString("mqtt_host") : String(MQTT_HOST);
     brokerPort = p.isKey("mqtt_port") ? p.getUShort("mqtt_port") : MQTT_PORT;
     brokerUser = p.isKey("mqtt_user") ? p.getString("mqtt_user") : String(MQTT_USER);
     brokerPass = p.isKey("mqtt_pass") ? p.getString("mqtt_pass") : String(MQTT_PASS);
     p.end();
 
-    ESP_LOGI(TAG, "host=%s label=%s brightness=%u power=%s broker=%s", host.c_str(),
-             label.c_str(), bright, on ? "on" : "off",
+    ESP_LOGI(TAG, "host=%s label=%s brightness=%u power=%s reversed=%s broker=%s",
+             host.c_str(), label.c_str(), bright, on ? "on" : "off", flipped ? "yes" : "no",
              broker.length() ? broker.c_str() : "(none)");
 }
 
@@ -66,6 +67,14 @@ void LampSettings::savePower(bool value) {
     Preferences p;
     p.begin(NVS_NS, false);
     p.putBool("power", on);
+    p.end();
+}
+
+void LampSettings::saveReversed(bool value) {
+    flipped = value;
+    Preferences p;
+    p.begin(NVS_NS, false);
+    p.putBool("reversed", flipped);
     p.end();
 }
 
@@ -159,6 +168,9 @@ void LampSettings::registerRoutes() {
     server.on("/api/power", HTTP_POST, std::bind(&LampSettings::handleApiPower, this));
     server.on("/api/brightness", HTTP_POST, std::bind(&LampSettings::handleApiBrightness, this));
     server.on("/api/identify", HTTP_POST, std::bind(&LampSettings::handleApiIdentify, this));
+    server.on("/api/strip", HTTP_POST, std::bind(&LampSettings::handleApiStrip, this));
+    server.on("/api/strip/test", HTTP_POST, std::bind(&LampSettings::handleApiStripTest, this));
+    server.on("/api/frame", HTTP_GET, std::bind(&LampSettings::handleApiFrame, this));
     server.on("/api/alert", HTTP_POST, std::bind(&LampSettings::handleApiAlert, this));
     server.on("/api/alert/clear", HTTP_POST, std::bind(&LampSettings::handleApiAlertClear, this));
     server.on("/api/effects", HTTP_GET, std::bind(&LampSettings::handleApiEffects, this));
@@ -275,6 +287,11 @@ String LampSettings::statusJson(bool pretty) const {
     doc["brightness"] = lampBrightness();
     doc["color"] = lampColorHex();
     doc["identifying"] = lampIdentifying();
+
+    JsonObject strip = doc["strip"].to<JsonObject>();
+    strip["leds"] = lampLedCount();
+    strip["reversed"] = lampReversed();
+    strip["testing"] = lampTestingOrder();
 
     JsonObject alert = doc["alert"].to<JsonObject>();
     alert["active"] = lampAlerting();
@@ -404,6 +421,14 @@ void LampSettings::handleApiIndex() {
     add("POST", "/api/power", "{\"on\": true | false | \"toggle\"}", "Switch the light on or off. Persists.");
     add("POST", "/api/brightness", "{\"value\": 0-255}", "Set brightness. Persists. Does not switch the light on.");
     add("POST", "/api/identify", "{\"seconds\": 1-60}", "Blink white so you can find this light.");
+    add("POST", "/api/strip/test", "{\"seconds\": 1-60}",
+        "Light physical LEDs 0, 1, 2 red, green, blue and the last one white, to see "
+        "which way the strip runs.");
+    add("GET", "/api/frame", "",
+        "Every LED's color right now: left to right across the sign, and in physical "
+        "strip order with overlays applied.");
+    add("POST", "/api/strip", "{\"reversed\": true | false}",
+        "Say whether LED 0 is at the right of the sign. Persists.");
     add("POST", "/api/alert", "{\"seconds\": 30}",
         "Pulse red to get attention. Overrides the effect, the brightness and the power "
         "state, then restores them. Always expires.");
@@ -494,6 +519,70 @@ void LampSettings::handleApiIdentify() {
     sendStatus();
 }
 
+// Which way the strip runs. The spatial effects draw left to right across the
+// sign; this is what makes "left" mean the left.
+void LampSettings::handleApiStrip() {
+    WebServer &server = configServer.getServer();
+    Params p(server);
+
+    if (!p.has("reversed")) {
+        server.send(400, "application/json",
+                    "{\"error\":\"send {\\\"reversed\\\": true | false}\"}");
+        return;
+    }
+
+    bool want = p.flag("reversed", flipped);
+    setLampReversed(want);
+    saveReversed(want);
+    ESP_LOGI(TAG, "strip %s over the API", want ? "reversed" : "not reversed");
+    sendStatus();
+}
+
+void LampSettings::handleApiStripTest() {
+    Params p(configServer.getServer());
+
+    // Longer by default than identify: this one is for walking round to the
+    // front of the sign and reading it, not for spotting which light blinked.
+    uint32_t ms = 15000;
+    if (p.has("seconds")) ms = (uint32_t)p.num("seconds", 15) * 1000;
+    if (ms < 1000) ms = 1000;
+    if (ms > IDENTIFY_MAX_MS) ms = IDENTIFY_MAX_MS;
+
+    testLampOrder(ms);
+    ESP_LOGI(TAG, "LED order test for %lu ms", (unsigned long)ms);
+    sendStatus();
+}
+
+// The sign, read back. Compact by default because the point is to sample it
+// many times a second from a script and watch an effect move.
+void LampSettings::handleApiFrame() {
+    WebServer &server = configServer.getServer();
+
+    JsonDocument doc;
+    doc["ms"] = millis();
+    doc["effect"] = lampEffectName();
+    doc["reversed"] = lampReversed();
+
+    uint32_t rgb[MAX_LEDS];
+    char hex[8];
+    uint8_t n = lampFrame(rgb, true);
+    JsonArray sign = doc["sign"].to<JsonArray>();
+    for (uint8_t i = 0; i < n; i++) {
+        snprintf(hex, sizeof(hex), "%06lx", (unsigned long)rgb[i]);
+        sign.add(hex);
+    }
+    n = lampFrame(rgb, false);
+    JsonArray strip = doc["strip"].to<JsonArray>();
+    for (uint8_t i = 0; i < n; i++) {
+        snprintf(hex, sizeof(hex), "%06lx", (unsigned long)rgb[i]);
+        strip.add(hex);
+    }
+
+    String out;
+    serializeJson(doc, out);
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", out);
+}
 
 // ===== Effects =====
 
@@ -506,7 +595,7 @@ static const uint32_t EFFECT_MAX_SECONDS = 8UL * 60 * 60;  // 8 hours
 // "#ff8800", "ff8800" or "0xff8800" -> 0xff8800. Returns false on anything
 // else, including a short form: "#f80" is a CSS convenience this does not
 // implement, and silently reading it as 0x000f80 would be worse than refusing.
-static bool parseHexColor(const String &in, uint32_t &out) {
+bool parseHexColor(const String &in, uint32_t &out) {
     String v = in;
     v.trim();
     if (v.startsWith("#")) v = v.substring(1);
@@ -534,14 +623,19 @@ void LampSettings::handleApiEffects() {
 
     JsonDocument doc;
     JsonArray list = doc["effects"].to<JsonArray>();
-    // The strip shows one color at a time, so these differ in how that color
-    // behaves over time, never in where it sits on the strip.
+    // Indexed by EffectMode, so this has to grow with EFFECT_NAMES.
     const char *what[EFFECT_COUNT] = {
         "Holds on a color, then eases to the next.",
         "Walks the palette steadily, never resting on a color.",
-        "Similar colors mixing and guttering, like a flame. The one effect that "
-        "lights the strip several colors at once.",
+        "Similar colors mixing and guttering, like a flame. Give it reds and ambers.",
         "One color at full brightness, held steady, switching cleanly to the next.",
+        "The palette laid across the sign, three colors at a time, sliding sideways.",
+        "A bright band of the next color sweeping back and forth over a dim base.",
+        "Fills from the left with the first color under a head of the second, holds, "
+        "drains, pours again. Made for amber and foam.",
+        "Neon that stutters to life letter by letter on every change of color.",
+        "A slow blend with single LEDs glinting toward white, like carbonation.",
+        "One color slowly swelling and fading, changing color at the bottom.",
     };
     for (uint8_t i = 0; i < EFFECT_COUNT; i++) {
         JsonObject e = list.add<JsonObject>();
@@ -1066,6 +1160,12 @@ void LampSettings::handleEffectsPage() {
         "walks the palette, never resting",
         "mixes similar colors, like a flame",
         "steady and bright, switches cleanly",
+        "colors across the sign, sliding",
+        "a bright band sweeping back and forth",
+        "fills with beer under a head of foam",
+        "neon stuttering to life",
+        "glints of white over a slow blend",
+        "slowly swelling and fading",
     };
     b += "<div id='fxbuttons'>";
     for (uint8_t i = 0; i < EFFECT_COUNT; i++) {
@@ -1084,6 +1184,9 @@ void LampSettings::handleEffectsPage() {
         const char *colors;
     };
     const Preset presets[] = {
+        // Amber and foam, in that order: pour fills with the first color and
+        // tops it with the second.
+        {"Beer", "#ff9000,#fff0c8"},
         {"Flame", "#ff2000,#ff6000,#ffa000"},
         {"Ocean", "#0040ff,#00c0ff,#00ffc0"},
         {"Sunset", "#ff0040,#ff6000,#ffc000"},
@@ -1239,6 +1342,28 @@ void LampSettings::handleSettingsGet() {
 
     b += "<hr>";
     b += "<form method='POST' action='/settings'>";
+    b += "<h2>Strip</h2>";
+    b += "<p>Drift, scan and pour move across the sign from left to right. Show the "
+         "LED order, look at the sign from the front, and tick the box if the "
+         "<b style='color:#d00'>red</b> LED is at the right-hand end.</p>";
+    b += "<div class='button-group'>";
+    b += "<button type='button' id='orderbtn' class='button'>Show LED order</button>";
+    b += "</div>";
+    b += "<small>Red is LED 0, then green and blue; white is the last LED. Shows for 15 "
+         "seconds.</small>";
+    // A hidden field ahead of the checkbox, so an unticked box still submits
+    // "0" and the save handler can tell "unticked" from "not this form".
+    b += "<div class='form-group'>";
+    b += "<input type='hidden' name='reversed' value='0'>";
+    b += "<label><input type='checkbox' name='reversed' value='1'";
+    if (flipped) b += " checked";
+    b += "> Red (LED 0) is on the right</label>";
+    b += "</div>";
+    b += "<div class='button-group'><button type='submit' class='button primary'>Save direction</button></div>";
+    b += "</form>";
+
+    b += "<hr>";
+    b += "<form method='POST' action='/settings'>";
     b += "<h2>Home Assistant</h2>";
     b += "<div id='mqttstate'></div>";
     b += "<div class='form-group'>";
@@ -1290,6 +1415,8 @@ void LampSettings::handleSettingsGet() {
 
     b += "<script>";
     b += controlsJs();
+    b += "document.getElementById('orderbtn').onclick=function(){"
+         "post('/api/strip/test',{seconds:15}).then(render);};";
     b += "var installing=false;"
          "function esc(t){var d=document.createElement('div');d.textContent=t;return d.innerHTML;}"
          "function otaBox(o){"
@@ -1355,6 +1482,17 @@ void LampSettings::handleSettingsSave() {
 
     bool hostChanged = newHost != host;
     saveNames(newLabel, newHost);
+
+    // The strip form posts "reversed" twice when ticked -- the hidden 0 and the
+    // checkbox's 1 -- so ticked is "any of them is 1".
+    if (server.hasArg("reversed")) {
+        bool want = false;
+        for (int i = 0; i < server.args(); i++) {
+            if (server.argName(i) == "reversed" && server.arg(i) == "1") want = true;
+        }
+        setLampReversed(want);
+        saveReversed(want);
+    }
 
     // The settings page carries two forms that both post here, and only one is
     // ever submitted at a time -- so the broker is written only when its fields
@@ -1501,10 +1639,21 @@ void LampSettings::handleHelp() {
             "Blink white for a moment so you can tell which light this is. Overrides power "
             "and restores whatever was showing, so identifying a light that is off leaves "
             "it off. 1&ndash;60 seconds.");
+    b += ep("POST", "/api/strip/test", "{\"seconds\": 15}",
+            "Light physical LEDs 0, 1 and 2 red, green and blue and the last LED white, "
+            "so you can see from the front which end the strip starts at. Ignores the "
+            "direction setting. 1&ndash;60 seconds.");
+    b += ep("GET", "/api/frame", "",
+            "Every LED's color right now, before brightness scaling. <code>sign</code> is "
+            "what the effect drew, left to right across the sign; <code>strip</code> is the "
+            "physical strip with overlays such as identify applied.");
+    b += ep("POST", "/api/strip", "{\"reversed\": true}",
+            "Say whether LED 0 is at the right of the sign. Drift, scan and pour run "
+            "left to right across the sign; this makes left mean left. Persists.");
     b += ep("GET", "/api/effects", "",
-            "The four effects this firmware can render, with the color and duration "
-            "limits. The strip shows one color at a time, so effects differ in how that "
-            "color changes over time, not in where it sits on the strip.");
+            "The effects this firmware can render, with the color and duration limits. "
+            "Blend, loop, neon, sparkle and breathe light the whole sign one color; "
+            "drift, scan and pour lay color out across it from left to right.");
     b += ep("POST", "/api/effect",
             "{\"effect\": \"blend\", \"colors\": [\"#ff0000\"], \"seconds\": 300}",
             "Set the effect and up to five colors. <code>colors</code> may be omitted to "
@@ -1568,7 +1717,8 @@ void LampSettings::handleHelp() {
          "config to <b>homeassistant/light/&lt;id&gt;/config</b> and becomes a light entity "
          "on its own &mdash; no YAML and no restart. It subscribes to "
          "<b>sfbeerlight/&lt;hostname&gt;/set</b> (Home Assistant's JSON light schema: state, "
-         "brightness, color, effect), publishes retained state to "
+         "brightness, color, effect, plus <b>colors</b>: up to five \"#rrggbb\" strings for a "
+         "whole palette), publishes retained state to "
          "<b>sfbeerlight/&lt;hostname&gt;/state</b>, and carries a last will on "
          "<b>sfbeerlight/&lt;hostname&gt;/availability</b> so the entity goes unavailable when "
          "the light drops off.</p>";
@@ -1592,6 +1742,7 @@ void LampSettings::handleHelp() {
     b += row("brightness", "0&ndash;255, what it shows at when on.");
     b += row("color", "The color the strip is on right now, <code>#rrggbb</code>.");
     b += row("identifying", "True while the identify flash is running.");
+    b += row("strip", "leds, reversed (LED 0 is at the right), testing (the order test is showing).");
     b += row("network", "online, ssid, ip, rssi, mac.");
     b += row("ota", "state, latest, available, checked (seconds ago, -1 if never), error.");
     b += row("uptime", "Seconds since boot.");
