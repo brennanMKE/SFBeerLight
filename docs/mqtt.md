@@ -75,17 +75,19 @@ Home Assistant's JSON light schema. Any subset of the fields, in one message.
 |---|---|---|
 | `state` | `"ON"` / `"OFF"` | Power. Persisted, so it survives a power cut. |
 | `brightness` | 0–255 | Persisted. Independent of power. |
-| `effect` | `blend`, `loop`, `flicker`, `neon` | Keeps the current palette. |
-| `color` | `{"r":,"g":,"b":}` | **Replaces** the palette with this one color. |
+| `effect` | `blend`, `loop`, `flicker`, `neon`, `drift`, `scan`, `pour`, `ignite`, `sparkle`, `breathe` | Keeps the current palette unless `colors` or `color` is also sent. |
+| `colors` | array of 1–5 `"#rrggbb"` strings | **Replaces** the palette. Same format as `/api/effect`; the `#` is optional. Wins over `color`. |
+| `color` | `{"r":,"g":,"b":}` | **Replaces** the palette with this one color. What Home Assistant's color picker sends. |
 
 ```sh
 mosquitto_pub -h broker -t sfbeerlight/castor-light/set -m '{"state":"OFF"}'
 mosquitto_pub -h broker -t sfbeerlight/castor-light/set -m '{"state":"ON","brightness":200}'
 mosquitto_pub -h broker -t sfbeerlight/castor-light/set -m '{"effect":"flicker"}'
 mosquitto_pub -h broker -t sfbeerlight/castor-light/set -m '{"color":{"r":0,"g":0,"b":255}}'
+mosquitto_pub -h broker -t sfbeerlight/castor-light/set -m '{"effect":"pour","colors":["#ff9000","#fff0c8"]}'
 ```
 
-Ordering within a message: `brightness` first, then `color` and `effect`
+Ordering within a message: `brightness` first, then `colors`, `color` and `effect`
 together, then `state`. So "turn on and set a color" in one message ends up on,
 whichever order the fields were written in.
 
@@ -105,6 +107,8 @@ message from landing.
 | `{"state": true}` | **Ignored** — see below |
 | `{"effect": "chase"}` | Effect unchanged; other fields still apply |
 | `{"brightness": 999}` | Brightness unchanged; other fields still apply |
+| `{"colors": ["#ff9000", "nothex"]}` | Palette unchanged (no half-applied palette), logged; other fields still apply |
+| `{"colors": [six colors]}` | First five used, the rest dropped — as over REST |
 
 `state` must be the **word** `"ON"` or `"OFF"`, not a boolean. `{"state": true}`
 is accepted silently and never turns the light on, which is a miserable thing to
@@ -112,10 +116,12 @@ debug — it is the single most common mistake with the JSON light schema.
 
 ### Not supported
 
-`transition`, `flash`, `color_temp`, `white`, `hs`/`xy` color, and effect
-parameters (speed, intensity, multi-color palettes). A palette of up to five
-colors is a REST-only feature; Home Assistant's light entity has one color
-picker, so MQTT sets one color. See [rest-api.md](rest-api.md#effects).
+`transition`, `flash`, `color_temp`, `white`, `hs`/`xy` color, effect
+parameters (speed, intensity), and an expiry: an effect set over MQTT runs until
+the next one or a reboot, never reverting on its own the way `/api/effect` does.
+
+`colors` is outside Home Assistant's light schema. The entity's color picker
+still sends one `color`; send `colors` from an automation with `mqtt.publish`.
 
 ## Subscribe: `sfbeerlight/<hostname>/alert` and `sfbeerlight/all/alert`
 
@@ -237,7 +243,7 @@ and describe an alert that finished hours ago.
 ## Publish: `sfbeerlight/<hostname>/state`
 
 ```json
-{"state":"ON","brightness":90,"color_mode":"rgb","color":{"r":255,"g":32,"b":0},"effect":"flicker"}
+{"state":"ON","brightness":90,"color_mode":"rgb","color":{"r":255,"g":32,"b":0},"effect":"flicker","colors":["#ff2000","#ff6000","#ffa000"]}
 ```
 
 | Field | Meaning |
@@ -247,9 +253,10 @@ and describe an alert that finished hours ago.
 | `color_mode` | Always `"rgb"` |
 | `color` | The palette's **first** color, not the live one |
 | `effect` | The running effect |
+| `colors` | The whole palette as `"#rrggbb"` strings — what a `colors` command takes, so it can be sent back unchanged. Outside HA's schema; HA ignores it. |
 
 Published on connect, after every accepted command, and whenever power,
-brightness, effect or the palette's first color changes — **not per frame**. The
+brightness, effect or the palette changes — **not per frame**. The
 live color moves continuously under `blend`, so publishing it would be a message
 every 16 ms for a value nothing can act on. The first palette entry is stable,
 and is the color someone actually picked.
@@ -286,12 +293,12 @@ needs to be added to `configuration.yaml`.
   "brightness": true,
   "supported_color_modes": ["rgb"],
   "effect": true,
-  "effect_list": ["blend", "loop", "flicker", "neon"],
+  "effect_list": ["blend", "loop", "flicker", "neon", "drift", "scan", "pour", "ignite", "sparkle", "breathe"],
   "device": {
     "identifiers": ["sfbeerlight_44b176051860"],
     "name": "Castor",
     "manufacturer": "SF Beer Light",
-    "model": "Strip of 8",
+    "model": "14-LED edge-lit sign",
     "sw_version": "0.0.5",
     "configuration_url": "http://castor-light.local/"
   }

@@ -37,6 +37,7 @@ static bool lastPower = false;
 static uint8_t lastBrightness = 0;
 static String lastEffect;
 static uint32_t lastColor = 0xFFFFFFFF;
+static String lastColors;
 static bool everPublished = false;
 
 // Stable across renames, because it is the thing Home Assistant keys the entity
@@ -117,8 +118,20 @@ static void publishState(bool force = false) {
     String effect = lampEffectName();
     uint32_t color = reportedColor();
 
+    // The whole palette, as "#rrggbb" strings -- the form a "colors" command
+    // takes, so a script can read it back and send it again unchanged.
+    uint32_t palette[MAX_COLORS];
+    uint8_t paletteCount = lampEffectColors(palette);
+    String colors;
+    for (uint8_t i = 0; i < paletteCount; i++) {
+        char hex[8];
+        snprintf(hex, sizeof(hex), "#%06lx", (unsigned long)palette[i]);
+        if (i) colors += ',';
+        colors += hex;
+    }
+
     if (!force && everPublished && power == lastPower && brightness == lastBrightness &&
-        effect == lastEffect && color == lastColor) {
+        effect == lastEffect && color == lastColor && colors == lastColors) {
         return;
     }
 
@@ -134,6 +147,13 @@ static void publishState(bool force = false) {
     rgb["g"] = (color >> 8) & 0xFF;
     rgb["b"] = color & 0xFF;
     doc["effect"] = effect;
+    // Not part of Home Assistant's schema, which ignores keys it does not know.
+    JsonArray list = doc["colors"].to<JsonArray>();
+    for (uint8_t i = 0; i < paletteCount; i++) {
+        char hex[8];
+        snprintf(hex, sizeof(hex), "#%06lx", (unsigned long)palette[i]);
+        list.add(hex);
+    }
 
     String payload;
     serializeJson(doc, payload);
@@ -150,6 +170,7 @@ static void publishState(bool force = false) {
     lastBrightness = brightness;
     lastEffect = effect;
     lastColor = color;
+    lastColors = colors;
     everPublished = true;
 }
 
@@ -191,7 +212,7 @@ static void publishDiscovery() {
     device["identifiers"][0] = id;
     device["name"] = settings.displayName();
     device["manufacturer"] = "SF Beer Light";
-    device["model"] = "Ring of 8";
+    device["model"] = "14-LED edge-lit sign";
     device["sw_version"] = FIRMWARE_VERSION;
     device["configuration_url"] = "http://" + settings.hostName() + ".local/";
 
@@ -269,9 +290,33 @@ static void onMessage(char *topic, byte *payload, unsigned int length) {
 
     // Color and effect both land as "the current effect, with this palette", so
     // they are resolved together before either is applied.
+    // A whole palette, which Home Assistant's light schema has no way to say:
+    // "colors": ["#ff9000", "#fff0c8"], the same hex strings /api/effect takes.
+    // Read before "color" and wins over it, because a command carrying both
+    // came from something that knew what it wanted -- not from the color
+    // picker, which only ever sends one. A bad entry refuses the whole palette
+    // rather than applying the half that parsed.
+    uint32_t palette[MAX_COLORS];
+    uint8_t paletteCount = 0;
+    if (doc["colors"].is<JsonArrayConst>()) {
+        bool ok = true;
+        for (JsonVariantConst v : doc["colors"].as<JsonArrayConst>()) {
+            if (paletteCount >= MAX_COLORS) break;  // extras dropped, as over REST
+            if (!v.is<const char *>() || !parseHexColor(v.as<String>(), palette[paletteCount])) {
+                ok = false;
+                break;
+            }
+            paletteCount++;
+        }
+        if (!ok || paletteCount == 0) {
+            ESP_LOGW(TAG, "ignoring colors: want 1-%d hex strings like \"#ff9000\"", MAX_COLORS);
+            paletteCount = 0;
+        }
+    }
+
     bool haveColor = doc["color"]["r"].is<int>();
     bool haveEffect = doc["effect"].is<const char *>();
-    if (haveColor || haveEffect) {
+    if (paletteCount || haveColor || haveEffect) {
         uint8_t mode = lampEffectMode();
         if (haveEffect) {
             String wanted = doc["effect"].as<String>();
@@ -282,7 +327,10 @@ static void onMessage(char *topic, byte *payload, unsigned int length) {
 
         uint32_t colors[MAX_COLORS];
         uint8_t count;
-        if (haveColor) {
+        if (paletteCount) {
+            for (uint8_t i = 0; i < paletteCount; i++) colors[i] = palette[i];
+            count = paletteCount;
+        } else if (haveColor) {
             // Home Assistant's color picker is one color, so it replaces the
             // palette rather than joining it.
             colors[0] = ((uint32_t)(doc["color"]["r"].as<uint8_t>()) << 16) |
