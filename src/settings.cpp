@@ -331,6 +331,9 @@ String LampSettings::statusJson(bool pretty) const {
     net["ssid"] = online ? WiFi.SSID() : String();
     net["ip"] = online ? WiFi.localIP().toString() : String();
     net["rssi"] = online ? WiFi.RSSI() : 0;
+    net["gateway"] = online ? WiFi.gatewayIP().toString() : String();
+    net["dns"] = online ? WiFi.dnsIP(0).toString() : String();
+    net["dns2"] = online ? WiFi.dnsIP(1).toString() : String();
     net["mac"] = WiFi.macAddress();
 
     JsonObject mqttObj = doc["mqtt"].to<JsonObject>();

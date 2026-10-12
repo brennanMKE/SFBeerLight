@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <mdns.h>  // mdns_hostname_set(), which ESPmDNS does not expose
 #include <esp_log.h>
+#include <esp_netif.h>
 
 #include "settings.h"
 #include "version.h"
@@ -24,6 +25,35 @@ LampSettings settings(runloop.getConfigServer());
 static String mdnsName;
 
 const char *mdnsHostname() { return mdnsName.c_str(); }
+
+// The Eero's IPv6 router advertisements hand out Google's IPv6 resolvers
+// (2001:4860:4860::8888), and lwIP puts them in the DNS slots even though this
+// build has no IPv6 address to reach them from. Every unicast lookup then times
+// out -- the OTA check fails as "GitHub returned HTTP -1" -- while mDNS, and so
+// MQTT to homeassistant.local, keeps working and hides it. When the resolvers
+// are not usable IPv4 ones, point DNS at the gateway, which answers on the LAN.
+// An advertisement can arrive at any time, so this is re-checked, not set once.
+static void keepIpv4Dns() {
+    static uint32_t lastCheck = 0;
+    if (millis() - lastCheck < 5000) return;
+    lastCheck = millis();
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    IPAddress dns = WiFi.dnsIP(0);
+    if (dns.type() == IPv4 && dns != IPAddress((uint32_t)0)) return;
+
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    IPAddress gw = WiFi.gatewayIP();
+    if (!netif || gw == IPAddress((uint32_t)0)) return;
+
+    esp_netif_dns_info_t info = {};
+    info.ip.type = ESP_IPADDR_TYPE_V4;
+    info.ip.u_addr.ip4.addr = (uint32_t)gw;
+    esp_netif_set_dns_info(netif, ESP_NETIF_DNS_MAIN, &info);
+    esp_netif_set_dns_info(netif, ESP_NETIF_DNS_BACKUP, &info);
+    ESP_LOGW(TAG, "DNS was %s, unusable without IPv6; using the gateway %s",
+             dns.toString().c_str(), gw.toString().c_str());
+}
 
 void setupWifiLink() {
     // Bring the WiFi driver up BEFORE EasyWiFi runs. Two things depend on it:
@@ -120,4 +150,6 @@ void loopWifiLink() {
         mdns_hostname_set(settings.hostName().c_str());
         MDNS.setInstanceName(settings.hostName());
     }
+
+    keepIpv4Dns();
 }
