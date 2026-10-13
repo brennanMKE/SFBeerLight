@@ -74,8 +74,9 @@ int32_t lampAlertRemaining();
 // ===== Chime =====
 //
 // A quarter-hour mark: Home Assistant fires one on the hour and at 15, 30 and
-// 45 past. The light surges 25% brighter for 15 seconds and settles back, with
-// the running effect and its colors left exactly as they were.
+// 45 past. For 15 seconds the light's brightness swells smoothly up to full
+// and back down about once a second, with the running effect and its colors
+// left exactly as they were.
 //
 // Unlike an alert it respects power: a light switched off stays off. A chime is
 // ambient, not a summons. `minute` is the mark it is for (0, 15, 30, 45), or -1

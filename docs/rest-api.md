@@ -98,8 +98,8 @@ no broker involved, including when the broker is the thing that has gone wrong.
 curl -X POST 'http://light.local/api/chime?minute=15'
 ```
 
-Surges 25% brighter for 15 seconds, then settles back, with the effect and colors
-untouched. A light that is switched off stays off. `minute` is optional. This is
+Swells brightness smoothly up to full and back down about once a second for 15
+seconds, with the effect and colors untouched. A light that is switched off stays off. `minute` is optional. This is
 the REST twin of the quarter-hour chime Home Assistant publishes over MQTT; see
 [mqtt.md](mqtt.md#subscribe-sfbeerlightallchime-and-sfbeerlighthostnamechime).
 

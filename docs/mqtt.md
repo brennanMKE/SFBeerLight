@@ -245,8 +245,8 @@ and describe an alert that finished hours ago.
 ## Subscribe: `sfbeerlight/all/chime` and `sfbeerlight/<hostname>/chime`
 
 The quarter-hour chime. Home Assistant publishes one message **on the hour and at
-15, 30 and 45 past**, and every light surges **25% brighter for 15 seconds**, then
-settles back. The running effect and its colors carry on underneath untouched —
+15, 30 and 45 past**, and for **15 seconds** every light's brightness **swells
+smoothly up to full and back down, about once a second**. The running effect and its colors carry on underneath untouched —
 only brightness moves.
 
 ```sh
@@ -274,17 +274,23 @@ different looks later without anything changing on the Home Assistant side.
 
 Any value 0–59 is accepted; outside that range it counts as no mark.
 
-### The surge
+### The swell
 
 | | |
 |---|---|
 | Length | 15 s |
-| Peak | Configured brightness + 25%, capped at 255 |
-| Shape | Eases up over 1.2 s, holds, eases down over the last 2.5 s |
+| Swell | 1.2 s, smooth (cubic), up to full (255) and back |
+| Bottom of a swell | The configured brightness, or 90 if that is higher |
+| Ends | Fades into the swells over 0.4 s and back out over the last 1.5 s |
 
-25% is relative to the light's own brightness: at 150 it peaks at 188, at 64 it
-peaks at 80. A light at 255 is already at the ceiling and shows no surge; a light
-at 0 stays at 0.
+It goes to full regardless of the configured brightness, and dips to 90 on a
+light that is brighter than that, so even a light at 255 visibly chimes. A light
+at brightness 0 stays dark. There are no hard edges anywhere — it never flashes.
+
+History, so it is not retried: 0.0.4 eased 25% brighter over a second and could
+not be seen (LED brightness reads roughly logarithmically, so 150 → 188 is a
+barely visible nudge). A test build with hard on/off pulses was obvious but read
+as flashing. The swell is a large change made smoothly.
 
 * **It respects power.** A light switched off stays off — a chime is ambient, not
   a summons. (Contrast the alert, which overrides power.)

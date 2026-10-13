@@ -442,7 +442,7 @@ void LampSettings::handleApiIndex() {
         "state, then restores them. Always expires.");
     add("POST", "/api/alert/clear", "", "Stop an alert now.");
     add("POST", "/api/chime", "{\"minute\": 0 | 15 | 30 | 45}",
-        "Surge 25% brighter for 15 seconds, keeping the effect. The quarter-hour chime.");
+        "Swell brightness up and down for 15 seconds, keeping the effect. The quarter-hour chime.");
     add("GET", "/api/effects", "", "The effects this firmware can render, and the limits.");
     add("POST", "/api/effect",
         "{\"effect\": \"blend\", \"colors\": [\"#ff0000\"], \"seconds\": 300}",
@@ -1689,7 +1689,8 @@ void LampSettings::handleHelp() {
             "hour; it always expires, because a light stuck red is worse than no alert.");
     b += ep("POST", "/api/alert/clear", "", "Stop an alert now.");
     b += ep("POST", "/api/chime", "{\"minute\": 0 | 15 | 30 | 45}",
-            "Surge 25% brighter for 15 seconds, easing up and back down, with the effect "
+            "Swell brightness smoothly up to full and back down about once a second for "
+            "15 seconds, with the effect "
             "and colors untouched. Home Assistant fires this on the hour and at 15, 30 and "
             "45 past. A light that is switched off stays off.");
     b += ep("POST", "/api/name", "{\"name\": \"Living Room\", \"hostname\": \"sf-beer-light\"}",

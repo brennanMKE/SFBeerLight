@@ -106,13 +106,19 @@ static const uint32_t ALERT_DEFAULT_S = 30;
 static const uint32_t ALERT_MAX_S = 3600;
 
 // ===== Chime =====
-// A quarter-hour surge: 25% over the configured brightness for 15 seconds. It
-// eases up and back down rather than stepping, so it reads as the sign taking a
-// breath, not as someone bumping the dimmer.
+// A quarter-hour signal, 15 seconds long: brightness swells up to full and back
+// down about once a second, smoothly, with the effect running underneath.
+//
+// The first version eased 25% brighter over a second and nobody could see it:
+// brightness on an LED reads roughly logarithmically, so 150 -> 188 is a barely
+// visible nudge. The second opened with hard on/off pulses, which were obvious
+// but read as flashing. This is between the two: a large swing, so it is
+// noticed from across a room, but a smooth one, so it never blinks.
 static const uint32_t CHIME_MS = 15000;
-static const uint32_t CHIME_RISE_MS = 1200;
-static const uint32_t CHIME_FALL_MS = 2500;
-static const uint8_t CHIME_BOOST_PCT = 25;
+static const uint32_t CHIME_SWELL_MS = 1200;  // one up-and-down
+static const uint8_t CHIME_LOW = 90;          // the bottom of a swell, at most
+static const uint32_t CHIME_IN_MS = 400;      // easing into the swells
+static const uint32_t CHIME_OUT_MS = 1500;    // and back out to the light's own level
 
 // What reaches the strip, in physical order.
 CRGB leds[NUM_LEDS];
@@ -263,25 +269,28 @@ void chimeLamp(int8_t minute) {
 bool lampChiming() { return chiming; }
 int8_t lampChimeMinute() { return chimeMinute; }
 
-// The brightness a chime wants right now: the configured value plus up to 25%,
-// ramped in and out.
+// The brightness a chime wants right now. Swells between a low point and full,
+// faded in and out against the configured brightness so neither end of the
+// chime steps. A light whose brightness is 0 stays dark -- that is someone's
+// choice, like switching it off.
 static uint8_t chimeBrightness(uint32_t now) {
+    if (brightness == 0) return 0;
     uint32_t into = now - chimeStart;
-    uint16_t peak = (uint16_t)brightness + ((uint16_t)brightness * CHIME_BOOST_PCT + 50) / 100;
-    if (peak > 255) peak = 255;
-    uint16_t extra = peak - brightness;
 
-    uint32_t level;  // 0-255, how much of the extra to apply
-    if (into < CHIME_RISE_MS) {
-        level = (into * 255UL) / CHIME_RISE_MS;
-    } else if (into > CHIME_MS - CHIME_FALL_MS) {
-        level = ((CHIME_MS - into) * 255UL) / CHIME_FALL_MS;
-    } else {
-        level = 255;
+    // The bottom of a swell is the light's own level, unless that is already
+    // bright -- then dip to CHIME_LOW so a light at 255 still visibly moves.
+    uint8_t low = brightness < CHIME_LOW ? brightness : CHIME_LOW;
+    // cubicwave8 starts at 0, so the first swell rises from the bottom.
+    uint8_t wave = cubicwave8((uint8_t)(((into % CHIME_SWELL_MS) * 256UL) / CHIME_SWELL_MS));
+    uint8_t target = low + ((uint16_t)(255 - low) * wave) / 255;
+
+    uint32_t env = 255;  // how much of the swell to apply
+    if (into < CHIME_IN_MS) {
+        env = ease8InOutQuad((uint8_t)((into * 255UL) / CHIME_IN_MS));
+    } else if (into > CHIME_MS - CHIME_OUT_MS) {
+        env = ease8InOutQuad((uint8_t)(((CHIME_MS - into) * 255UL) / CHIME_OUT_MS));
     }
-    // ease8InOutQuad so the ends of the ramp are soft rather than corners.
-    level = ease8InOutQuad((uint8_t)level);
-    return (uint8_t)(brightness + (extra * level) / 255);
+    return (uint8_t)((brightness * (255 - env) + target * env) / 255);
 }
 
 static String hex(const CRGB &c) {
