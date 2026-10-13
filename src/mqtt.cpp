@@ -57,12 +57,17 @@ static String commandTopic() { return baseTopic() + "/set"; }
 static String availabilityTopic() { return baseTopic() + "/availability"; }
 static String alertTopic() { return baseTopic() + "/alert"; }
 static String alertStateTopic() { return baseTopic() + "/alert/state"; }
+static String chimeTopic() { return baseTopic() + "/chime"; }
 
 // One publish that reaches every light. Home Assistant firing an alert almost
 // never means "that light" -- it means "whoever is in the building" -- and a
 // broadcast keeps an automation from having to name each light and be edited
 // when a third one arrives.
 static const char *ALERT_ALL_TOPIC = "sfbeerlight/all/alert";
+
+// The quarter-hour chime, broadcast the same way: Home Assistant publishes one
+// message on the hour and at 15, 30 and 45 past, and every light surges.
+static const char *CHIME_ALL_TOPIC = "sfbeerlight/all/chime";
 
 bool mqttEnabled() { return settings.mqttHost().length() > 0; }
 bool mqttConnected() { return mqtt.connected(); }
@@ -242,6 +247,26 @@ static void onMessage(char *topic, byte *payload, unsigned int length) {
     ESP_LOGI(TAG, "%s: %s", topic, msg.c_str());
 
     String t(topic);
+    if (t.endsWith("/chime")) {
+        // The payload only names the mark, and is optional: {"minute": 15}, a
+        // bare "15", or nothing at all. Anything unreadable still chimes -- a
+        // clock that skips a quarter because of a typo is worse than one that
+        // does not know which quarter it is.
+        int8_t minute = -1;
+        String body = msg;
+        body.trim();
+        JsonDocument chimeDoc;
+        if (!deserializeJson(chimeDoc, msg) && chimeDoc["minute"].is<long>()) {
+            long v = chimeDoc["minute"].as<long>();
+            if (v >= 0 && v < 60) minute = (int8_t)v;
+        } else if (body.length() && isDigit(body[0])) {
+            long v = body.toInt();
+            if (v >= 0 && v < 60) minute = (int8_t)v;
+        }
+        chimeLamp(minute);
+        return;
+    }
+
     if (t.endsWith("/alert")) {
         // Deliberately forgiving about the payload. An alert is fired from an
         // automation in a hurry, and the difference between {"seconds":30} and
@@ -418,8 +443,10 @@ void loopMqtt() {
     mqtt.subscribe(commandTopic().c_str());
     mqtt.subscribe(alertTopic().c_str());
     mqtt.subscribe(ALERT_ALL_TOPIC);
-    ESP_LOGI(TAG, "subscribed to %s, %s and %s", commandTopic().c_str(), alertTopic().c_str(),
-             ALERT_ALL_TOPIC);
+    mqtt.subscribe(chimeTopic().c_str());
+    mqtt.subscribe(CHIME_ALL_TOPIC);
+    ESP_LOGI(TAG, "subscribed to %s, %s, %s, %s and %s", commandTopic().c_str(),
+             alertTopic().c_str(), ALERT_ALL_TOPIC, chimeTopic().c_str(), CHIME_ALL_TOPIC);
 
     publishDiscovery();
     publishState(true);

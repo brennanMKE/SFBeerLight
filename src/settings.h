@@ -95,6 +95,7 @@ private:
     void handleApiFrame();
     void handleApiAlert();
     void handleApiAlertClear();
+    void handleApiChime();
     void handleApiEffect();
     void handleApiEffectReset();
     void handleApiEffects();

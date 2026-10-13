@@ -47,6 +47,7 @@ one can control it.
 | POST | `/api/identify` | `{"seconds": 1-60}` |
 | POST | `/api/alert` | `{"seconds": 30}` |
 | POST | `/api/alert/clear` | — |
+| POST | `/api/chime` | `{"minute": 0 \| 15 \| 30 \| 45}` |
 | GET | `/api/effects` | — |
 | POST | `/api/effect` | `{"effect": "...", "colors": [...], "seconds": 300}` |
 | POST | `/api/effect/reset` | — |
@@ -90,6 +91,17 @@ hour, and always expires.
 This is the REST twin of the MQTT alert topic, which is how Home Assistant fires
 one; see [mqtt.md](mqtt.md). It exists so an alert can be tested and fired with
 no broker involved, including when the broker is the thing that has gone wrong.
+
+### Chime
+
+```sh
+curl -X POST 'http://light.local/api/chime?minute=15'
+```
+
+Surges 25% brighter for 15 seconds, then settles back, with the effect and colors
+untouched. A light that is switched off stays off. `minute` is optional. This is
+the REST twin of the quarter-hour chime Home Assistant publishes over MQTT; see
+[mqtt.md](mqtt.md#subscribe-sfbeerlightallchime-and-sfbeerlighthostnamechime).
 
 ### Effects
 

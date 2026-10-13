@@ -71,6 +71,22 @@ bool lampAlerting();
 // Seconds left, or -1 when no alert is running.
 int32_t lampAlertRemaining();
 
+// ===== Chime =====
+//
+// A quarter-hour mark: Home Assistant fires one on the hour and at 15, 30 and
+// 45 past. The light surges 25% brighter for 15 seconds and settles back, with
+// the running effect and its colors left exactly as they were.
+//
+// Unlike an alert it respects power: a light switched off stays off. A chime is
+// ambient, not a summons. `minute` is the mark it is for (0, 15, 30, 45), or -1
+// when the sender did not say; it is logged and reported, and does not change
+// the surge.
+void chimeLamp(int8_t minute);
+bool lampChiming();
+
+// The mark the last chime was for, or -1.
+int8_t lampChimeMinute();
+
 // The color the strip is showing right now, as "#rrggbb", before brightness
 // scaling. Reports the color the cycle is on even while the light is off.
 String lampColorHex();

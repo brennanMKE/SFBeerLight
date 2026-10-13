@@ -147,6 +147,17 @@ A red pulse to get attention, for Home Assistant to fire at something that needs
 a person. It overrides the effect, the brightness and the power state, then puts
 all three back, and always expires. See [docs/mqtt.md](docs/mqtt.md#subscribe-sfbeerlighthostnamealert-and-sfbeerlightallalert).
 
+### Quarter-hour chime
+
+```sh
+mosquitto_pub -h broker -t sfbeerlight/all/chime -m '{"minute": 15}'
+curl -X POST 'http://castor-light.local/api/chime?minute=15'
+```
+
+Home Assistant publishes this on the hour and at 15, 30 and 45 past. The light
+surges 25% brighter for 15 seconds and settles back, keeping its effect and
+colors. See [docs/mqtt.md](docs/mqtt.md#subscribe-sfbeerlightallchime-and-sfbeerlighthostnamechime).
+
 ### Effects
 
 ```sh

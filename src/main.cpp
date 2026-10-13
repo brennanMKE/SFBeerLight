@@ -105,6 +105,15 @@ static const uint8_t ALERT_FLOOR = 40;
 static const uint32_t ALERT_DEFAULT_S = 30;
 static const uint32_t ALERT_MAX_S = 3600;
 
+// ===== Chime =====
+// A quarter-hour surge: 25% over the configured brightness for 15 seconds. It
+// eases up and back down rather than stepping, so it reads as the sign taking a
+// breath, not as someone bumping the dimmer.
+static const uint32_t CHIME_MS = 15000;
+static const uint32_t CHIME_RISE_MS = 1200;
+static const uint32_t CHIME_FALL_MS = 2500;
+static const uint8_t CHIME_BOOST_PCT = 25;
+
 // What reaches the strip, in physical order.
 CRGB leds[NUM_LEDS];
 
@@ -137,6 +146,10 @@ static uint32_t identifyEnd = 0;
 static bool alerting = false;
 static uint32_t alertStart = 0;
 static uint32_t alertEnd = 0;
+
+static bool chiming = false;
+static uint32_t chimeStart = 0;
+static int8_t chimeMinute = -1;
 
 // What was last handed to FastLED. Identify and alert both override the
 // configured brightness, so the value actually applied is decided in one place
@@ -232,6 +245,43 @@ int32_t lampAlertRemaining() {
     uint32_t now = millis();
     if (timeReached(now, alertEnd)) return 0;
     return (int32_t)((alertEnd - now) / 1000);
+}
+
+void chimeLamp(int8_t minute) {
+    // A second chime while one is running restarts it rather than stacking: two
+    // automations firing on the same mark should look like one chime.
+    chimeStart = millis();
+    chimeMinute = minute;
+    chiming = true;
+    if (minute < 0) {
+        ESP_LOGI(TAG, "chime");
+    } else {
+        ESP_LOGI(TAG, "chime for :%02d", minute);
+    }
+}
+
+bool lampChiming() { return chiming; }
+int8_t lampChimeMinute() { return chimeMinute; }
+
+// The brightness a chime wants right now: the configured value plus up to 25%,
+// ramped in and out.
+static uint8_t chimeBrightness(uint32_t now) {
+    uint32_t into = now - chimeStart;
+    uint16_t peak = (uint16_t)brightness + ((uint16_t)brightness * CHIME_BOOST_PCT + 50) / 100;
+    if (peak > 255) peak = 255;
+    uint16_t extra = peak - brightness;
+
+    uint32_t level;  // 0-255, how much of the extra to apply
+    if (into < CHIME_RISE_MS) {
+        level = (into * 255UL) / CHIME_RISE_MS;
+    } else if (into > CHIME_MS - CHIME_FALL_MS) {
+        level = ((CHIME_MS - into) * 255UL) / CHIME_FALL_MS;
+    } else {
+        level = 255;
+    }
+    // ease8InOutQuad so the ends of the ramp are soft rather than corners.
+    level = ease8InOutQuad((uint8_t)level);
+    return (uint8_t)(brightness + (extra * level) / 255);
 }
 
 static String hex(const CRGB &c) {
@@ -451,11 +501,13 @@ static void loopLeds() {
         alerting = false;
         ESP_LOGI(TAG, "alert over");
     }
+    if (chiming && (now - chimeStart) >= CHIME_MS) chiming = false;
 
     // One decision about brightness per frame, made here rather than by
-    // whichever overlay started last. Both of them override what someone chose,
-    // and they can overlap.
-    uint8_t want = brightness;
+    // whichever overlay started last. They all override what someone chose,
+    // and they can overlap. A chime is the mildest, so it goes first and
+    // anything louder wins.
+    uint8_t want = chiming ? chimeBrightness(now) : brightness;
     bool showing = identifying || testingOrder;
     if (showing && want < IDENTIFY_MIN_BRIGHTNESS) want = IDENTIFY_MIN_BRIGHTNESS;
     if (alerting) want = ALERT_BRIGHTNESS;

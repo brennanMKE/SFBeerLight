@@ -173,6 +173,7 @@ void LampSettings::registerRoutes() {
     server.on("/api/frame", HTTP_GET, std::bind(&LampSettings::handleApiFrame, this));
     server.on("/api/alert", HTTP_POST, std::bind(&LampSettings::handleApiAlert, this));
     server.on("/api/alert/clear", HTTP_POST, std::bind(&LampSettings::handleApiAlertClear, this));
+    server.on("/api/chime", HTTP_POST, std::bind(&LampSettings::handleApiChime, this));
     server.on("/api/effects", HTTP_GET, std::bind(&LampSettings::handleApiEffects, this));
     server.on("/api/effect", HTTP_POST, std::bind(&LampSettings::handleApiEffect, this));
     server.on("/api/effect/reset", HTTP_POST, std::bind(&LampSettings::handleApiEffectReset, this));
@@ -296,6 +297,10 @@ String LampSettings::statusJson(bool pretty) const {
     JsonObject alert = doc["alert"].to<JsonObject>();
     alert["active"] = lampAlerting();
     alert["remaining"] = lampAlertRemaining();
+
+    JsonObject chime = doc["chime"].to<JsonObject>();
+    chime["active"] = lampChiming();
+    chime["minute"] = lampChimeMinute();
 
     JsonObject effect = doc["effect"].to<JsonObject>();
     effect["name"] = lampEffectName();
@@ -436,6 +441,8 @@ void LampSettings::handleApiIndex() {
         "Pulse red to get attention. Overrides the effect, the brightness and the power "
         "state, then restores them. Always expires.");
     add("POST", "/api/alert/clear", "", "Stop an alert now.");
+    add("POST", "/api/chime", "{\"minute\": 0 | 15 | 30 | 45}",
+        "Surge 25% brighter for 15 seconds, keeping the effect. The quarter-hour chime.");
     add("GET", "/api/effects", "", "The effects this firmware can render, and the limits.");
     add("POST", "/api/effect",
         "{\"effect\": \"blend\", \"colors\": [\"#ff0000\"], \"seconds\": 300}",
@@ -773,6 +780,16 @@ void LampSettings::handleApiAlert() {
 
 void LampSettings::handleApiAlertClear() {
     clearLampAlert();
+    sendStatus();
+}
+
+// REST twin of the MQTT chime topic, for testing the surge without waiting for
+// a quarter hour or involving the broker.
+void LampSettings::handleApiChime() {
+    Params p(configServer.getServer());
+    long v = p.has("minute") ? p.num("minute", -1) : -1;
+    chimeLamp(v >= 0 && v < 60 ? (int8_t)v : -1);
+    ESP_LOGI(TAG, "chime requested over HTTP");
     sendStatus();
 }
 
@@ -1671,6 +1688,10 @@ void LampSettings::handleHelp() {
             "to reach &mdash; then puts all three back. Defaults to 30 s, capped at one "
             "hour; it always expires, because a light stuck red is worse than no alert.");
     b += ep("POST", "/api/alert/clear", "", "Stop an alert now.");
+    b += ep("POST", "/api/chime", "{\"minute\": 0 | 15 | 30 | 45}",
+            "Surge 25% brighter for 15 seconds, easing up and back down, with the effect "
+            "and colors untouched. Home Assistant fires this on the hour and at 15, 30 and "
+            "45 past. A light that is switched off stays off.");
     b += ep("POST", "/api/name", "{\"name\": \"Living Room\", \"hostname\": \"sf-beer-light\"}",
             "Rename. <code>name</code> is free text and takes effect immediately; "
             "<code>hostname</code> is lowercase letters, digits and hyphens and becomes "
@@ -1731,6 +1752,9 @@ void LampSettings::handleHelp() {
          "a bare number, or <code>off</code> to clear one; an empty message uses the "
          "default. The light reports it on <b>sfbeerlight/&lt;hostname&gt;/alert/state</b> as "
          "<code>on</code> or <code>off</code>, unretained, for a binary sensor.</p>";
+    b += "<p class='api'>The quarter-hour chime is fired by publishing to "
+         "<b>sfbeerlight/all/chime</b> (or <b>sfbeerlight/&lt;hostname&gt;/chime</b>), payload "
+         "<code>{\"minute\": 15}</code>, a bare number, or empty.</p>";
     b += "<p class='api'>Anything set over MQTT has no expiry: Home Assistant is a "
          "controller, and an effect that reverted after five minutes would leave the entity "
          "showing a state the light no longer has. MQTT is optional &mdash; a light with no "

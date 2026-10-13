@@ -55,6 +55,8 @@ with no separators.
 | `sfbeerlight/<hostname>/alert` | **subscribe** | **never** | Fire or clear an alert |
 | `sfbeerlight/all/alert` | **subscribe** | **never** | The same, to every light at once |
 | `sfbeerlight/<hostname>/alert/state` | publish | no | `on` / `off` while an alert runs |
+| `sfbeerlight/<hostname>/chime` | **subscribe** | **never** | Quarter-hour chime |
+| `sfbeerlight/all/chime` | **subscribe** | **never** | The same, to every light at once |
 
 **Never retain a command.** A retained command replays on every reconnect, which
 pins the light to whatever was last sent and makes it impossible to control from
@@ -239,6 +241,93 @@ mqtt:
 
 It is **not retained**: a retained `on` would come back after a broker restart
 and describe an alert that finished hours ago.
+
+## Subscribe: `sfbeerlight/all/chime` and `sfbeerlight/<hostname>/chime`
+
+The quarter-hour chime. Home Assistant publishes one message **on the hour and at
+15, 30 and 45 past**, and every light surges **25% brighter for 15 seconds**, then
+settles back. The running effect and its colors carry on underneath untouched —
+only brightness moves.
+
+```sh
+mosquitto_pub -h broker -t sfbeerlight/all/chime -m '{"minute": 0}'    # on the hour
+mosquitto_pub -h broker -t sfbeerlight/all/chime -m '{"minute": 15}'   # quarter past
+mosquitto_pub -h broker -t sfbeerlight/all/chime -m '{"minute": 30}'   # half past
+mosquitto_pub -h broker -t sfbeerlight/all/chime -m '{"minute": 45}'   # quarter to
+mosquitto_pub -h broker -t sfbeerlight/all/chime -m '30'               # a bare number works
+mosquitto_pub -h broker -t sfbeerlight/all/chime -m ''                 # so does nothing
+```
+
+### Payload
+
+| Payload | Result |
+|---|---|
+| `{"minute": 0}` / `15` / `30` / `45` | Chime, recorded as that mark |
+| A bare number, e.g. `15` | The same |
+| Empty, or anything unreadable | Chime anyway, with no mark (`minute: -1`) |
+
+`minute` is optional and does not change the surge today — every mark gets the
+same response. It is logged (`chime for :15` in `/api/log`) and reported in
+`/api/status` as `chime.minute`, and it is there so the marks can be given
+different looks later without anything changing on the Home Assistant side.
+**Send it**, so that later firmware can tell the marks apart.
+
+Any value 0–59 is accepted; outside that range it counts as no mark.
+
+### The surge
+
+| | |
+|---|---|
+| Length | 15 s |
+| Peak | Configured brightness + 25%, capped at 255 |
+| Shape | Eases up over 1.2 s, holds, eases down over the last 2.5 s |
+
+25% is relative to the light's own brightness: at 150 it peaks at 188, at 64 it
+peaks at 80. A light at 255 is already at the ceiling and shows no surge; a light
+at 0 stays at 0.
+
+* **It respects power.** A light switched off stays off — a chime is ambient, not
+  a summons. (Contrast the alert, which overrides power.)
+* **It never changes the brightness setting.** Nothing is persisted and the state
+  topic does not change; Home Assistant sees no brightness change.
+* **A second chime restarts it** rather than stacking, so two automations firing on
+  the same mark look like one chime.
+* **Alert and identify win.** A chime that lands during either is hidden by it,
+  and resumes for whatever is left of its 15 seconds if they end first.
+
+Messages must **not be retained**. A retained chime would replay every time a
+light reconnects to the broker, surging at a random time.
+
+### From Home Assistant
+
+One automation, a time-pattern trigger on minutes divisible by 15:
+
+```yaml
+automation:
+  - alias: SF Beer Light quarter-hour chime
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "/15"
+    actions:
+      - action: mqtt.publish
+        data:
+          topic: sfbeerlight/all/chime
+          payload: '{"minute": {{ now().minute }}}'
+          retain: false
+```
+
+`time_pattern` with `minutes: "/15"` fires at :00, :15, :30 and :45. Add a
+condition (e.g. a time window) if the chime should only run during opening hours.
+
+### Testing it
+
+```sh
+mosquitto_pub -h <broker> -u <user> -P <pass> -t sfbeerlight/all/chime -m '{"minute": 15}'
+curl -X POST 'http://sf-beer-light.local/api/chime?minute=15'   # no broker needed
+curl -s http://sf-beer-light.local/api/status | grep -A3 chime  # "active": true for 15 s
+curl -s http://sf-beer-light.local/api/log | grep chime
+```
 
 ## Publish: `sfbeerlight/<hostname>/state`
 
